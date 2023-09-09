@@ -1,8 +1,11 @@
 import torch
+import torch.nn.functional as F
 from torch.utils.data import Dataset
 from sklearn.metrics import accuracy_score, precision_recall_fscore_support
 
 from fuzzywuzzy import fuzz
+
+print(torch.cuda.is_available())
 
 
 # class for dataset
@@ -12,7 +15,7 @@ class DuplicateDataset(Dataset):
         self.text2 = text2
         self.labels = labels
         self.tokenizer = tokenizer
-        self.max_seq_len = max_seq_len
+        self.max_seq_len = 0
 
     def __len__(self):
         return len(self.text1)
@@ -24,15 +27,15 @@ class DuplicateDataset(Dataset):
         distance = fuzz.ratio(self.text1[idx].lower(), self.text2[idx].lower())
         partial_distance = fuzz.partial_ratio(self.text1[idx].lower(), self.text2[idx].lower())
 
-        tokens = ['[CLS]'] + tokens1 + ['[SEP]'] + tokens2 + ['[SEP]'] + [distance] + ['[SEP]'] + [partial_distance] + [
-            '[SEP]']
+        tokens = ['[CLS]'] + tokens1 + ['[SEP]'] + tokens2 + ['[SEP]'] + [str(distance)] + ['[SEP]'] + [
+            str(partial_distance)] + ['[SEP]']  # huinya
+
         input_ids = self.tokenizer.convert_tokens_to_ids(tokens)
-        return {
-            'text': str(self.text1[idx]) + str(self.text2[idx]),
-            'input_ids': torch.tensor(input_ids),
-            'attention_mask': torch.tensor([[1] * len(input_ids)]),
-            'label': torch.tensor(self.labels[idx], dtype=torch.long)
-        }
+        input_ids = input_ids[:-1]
+        input_ids = F.pad(torch.tensor(input_ids), (0, 50 - len(input_ids)), 'constant', 100)
+        input_ids = F.pad(torch.tensor(input_ids), (0, 1), 'constant', 102)
+
+        return input_ids, torch.tensor(self.labels[idx], dtype=torch.long)
 
 
 # func to train model
@@ -41,9 +44,15 @@ def train(num_epochs, model, train_loader, optimizer):
         model.train()
         train_loss = 0.0
         for i, batch in enumerate(train_loader):
-            input_ids = batch['input_ids']
-            attention_mask = batch['attention_mask']
-            labels = batch['label']
+            input_ids, labels = batch
+
+            if len(input_ids) < 51:
+                pad_input = torch.zeros(51 - len(input_ids), 51).int()
+                pad_labels = torch.zeros(51 - len(input_ids)).int()
+                input_ids = torch.cat((input_ids, pad_input))
+                labels = torch.cat((labels, pad_labels))
+
+            attention_mask = torch.tensor([[1] * len(input_ids)])
 
             optimizer.zero_grad()
 
@@ -62,14 +71,23 @@ def eval(model, val_loader):
     model.eval()
     with torch.no_grad():
         val_preds = []
-        for batch in val_loader:
-            input_ids = batch['input_ids']
-            attention_mask = batch['attention_mask']
+        print(val_loader)
+        for i, batch in enumerate(val_loader):
 
+            input_ids, labels = batch
+
+            if len(input_ids) < 51:
+                pad_input = torch.zeros(51 - len(input_ids), 51).int()
+                pad_labels = torch.zeros(51 - len(input_ids)).int()
+                input_ids = torch.cat((input_ids, pad_input))
+                labels = torch.cat((labels, pad_labels))
+
+            attention_mask = torch.tensor([[1] * len(input_ids)])
             outputs = model(input_ids=input_ids, attention_mask=attention_mask)
             logits = outputs.logits
             preds = torch.argmax(logits, dim=-1)
             val_preds.extend(preds.cpu().detach().numpy().tolist())
+
     return val_preds
 
 

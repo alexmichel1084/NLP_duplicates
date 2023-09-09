@@ -8,4 +8,5 @@ class PrepareData:
         self.labels = train['is_duplicate'].values
 
     def get_data(self):
-        return train_test_split(self.name1, self.name2, self.labels, test_size=0.2, random_state=42)
+        return train_test_split(self.name1, self.name2, self.labels, test_size=0.2, random_state=42,
+                                stratify=self.labels)
